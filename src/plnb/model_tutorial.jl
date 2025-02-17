@@ -1,8 +1,835 @@
+### A Pluto.jl notebook ###
+# v0.20.4
+
+using Markdown
+using InteractiveUtils
+
+# This Pluto notebook uses @bind for interactivity. When running this notebook outside of Pluto, the following 'mock version' of @bind gives bound variables a default value (instead of an error).
+macro bind(def, element)
+    #! format: off
+    quote
+        local iv = try Base.loaded_modules[Base.PkgId(Base.UUID("6e696c72-6542-2067-7265-42206c756150"), "AbstractPlutoDingetjes")].Bonds.initial_value catch; b -> missing; end
+        local el = $(esc(element))
+        global $(esc(def)) = Core.applicable(Base.get, el) ? Base.get(el) : iv(el)
+        el
+    end
+    #! format: on
+end
+
+# ╔═╡ 26fde288-0ce8-4321-aa57-1ab8e6e2dd4e
+using  OrdinaryDiffEq,Plots, PlutoUI
+
+# ╔═╡ bb225ac2-ec7e-11ef-3f68-cfc06bae79e5
+md"# Barrier-Back Barrier Model Description"
+
+# ╔═╡ a4b1949d-57b2-4a28-ab5b-5885e0cd2dda
+	md"### Wave Height Function"
+
+# ╔═╡ 1fa14124-582b-461f-b74a-1268de491d30
+md"This function calculates the significant wave height of fetch limited waves in water of finite depth via the semi-empirical relationship described in Young and Verhagen 1996."
+
+# ╔═╡ af3b4831-55dc-4fb5-87b0-b35e543cf67b
+function wave_height(bL,z,g,U)
+
+    delta = z*g/U^2
+    chi = bL*g./U^2
+    epsilon = 3.64*10^-3*(tanh(0.493*delta^0.75)*tanh(3.13*10^-3*chi^0.57/tanh(0.493*delta^0.75)))^1.74
+    Hs = 4*sqrt(U^4*epsilon/g^2)
+    
+    return Hs
+
+end
+
+# ╔═╡ 63249cae-12b0-4d3c-b5c8-9a73f202cd84
+md"### Wave Period Function"
+
+# ╔═╡ 4a730b07-279c-4cf1-8846-eb2f8e65cac7
+md"This function calculates the wave period of fetch limited waves in water of finite depth via the semi-empirical relationship described in Young and Verhagen 1996."
+
+# ╔═╡ 45c6afb4-02da-45e9-9132-cdcee9ee82ce
+function wave_period(bL,z,g,U)
+
+    delta = z*g/U^2
+    chi = bL*g./U^2
+    ni = 0.133*(tanh(0.331*delta^1.01)*tanh(5.215*10^-4*chi^0.73/tanh(0.331*delta^1.01)))^-0.37
+    Tp = U/ni/g
+
+    return Tp
+
+end
+
+# ╔═╡ 9b7f7fda-b02d-447a-a014-a6881cf21792
+md"### Wave Number Function"
+
+# ╔═╡ 0847e53c-3144-48fd-8a99-d6f38bb73f89
+md"This function approximates the wave number of fetch limited waves in water of finite depth from a wave frequency, water depth, and the gravitational constant."
+
+# ╔═╡ 46366d34-6c7d-4803-b3c5-522286c27618
+function wave_number(F,H,g)
+
+    e1 = 4*pi^2*F^2*H/g
+    e2 = 1+0.6666666*e1+0.355555555*e1^2+0.1608465608*e1^3+
+         0.0632098765*e1^4+0.0217540484*e1^5+0.0065407983*e1^6
+    e3 = +e1^2+e1/e2
+    K1 = sqrt(e3)/H
+    o1 = sqrt(g*K1.*tanh(K1.*H))
+    e1 = o1^2*H/g 
+    e2 = 1+0.6666666*e1+0.355555555*e1^2+0.1608465608*e1^3+
+        0.0632098765*e1^4+0.0217540484*e1^5+0.0065407983*e1^6
+    e3 = +e1^2+e1/e2
+    K2 = sqrt(e3)/H
+    k = 2*K1-K2
+
+    return k
+
+end
+
+# ╔═╡ b7111f0b-89ed-44c9-9523-1fa8802f0c75
+md"### Wave Power Function"
+
+# ╔═╡ 1049abd7-189a-4495-b9a9-b8ae3a4a5db9
+md"This function computes the wave power as a function of wave height, wave period, and wave number based on Linear Wave Theory."
+
+# ╔═╡ 456e0470-5b61-4f04-949e-bccf031b0b54
+function wave_power(bL,Zs,g,U)
+
+    Hs = wave_height(bL,Zs,g,U)
+    Tp = wave_period(bL,Zs,g,U)
+    k = wave_number(1/Tp,Zs,g)
+    cg = 2*pi/k/Tp*0.5*(1+2*k*Zs/(sinh(2*k*Zs)))
+    WP = cg*9800/16*abs(Hs).^2
+
+    return WP
+
+end
+
+# ╔═╡ ccc026dd-337c-4c57-b5b6-3ea7e7f46f99
+md"### Lagoon Bed Shear Stress Function"
+
+# ╔═╡ c305c920-15d2-4f36-b3d8-35e67e10cb1b
+md"This function computes the bed shear stress in the lagoon as a function of wave height, wave period, and wave number based on Linear Wave Theory."
+
+# ╔═╡ 47506695-57c3-4dda-b8e4-a458dfd46e10
+function lagoon_bed_shear_stress(bL,ZL,g,ko,U)
+
+    Hs = wave_height(bL,ZL,g,U)
+    Tp = wave_period(bL,ZL,g,U)
+    k = wave_number(1/Tp,ZL,g)
+    Um = (pi*Hs/Tp/sinh(k*ZL))
+    aw = Tp*Um/pi
+    fw = 0.4*(aw/ko)^-0.75
+    τ = 1/2*1020*fw*Um^2
+
+    return τ
+
+end
+
+# ╔═╡ b2ac4e4d-a3bf-44b4-8c8c-9014069d62ff
+md"### Marsh Bed Shear Stress Function"
+
+# ╔═╡ 037b01a0-a7cb-4ac8-a102-4abea34161b2
+md"This function computes the bed shear stress in the marsh as a function of wave height, wave period, and wave number based on Linear Wave Theory. If vegetation is present on the marsh, the bed shear stress is 0."
+
+# ╔═╡ 279856ee-bd55-4b2d-a262-d0b9e31a178c
+function marsh_bed_shear_stress(bL,Zm,Bfrac,g,ko,U)
+
+    if Bfrac == 0
+
+        Hs = wave_height(bL,Zm,g,U)
+        Tp = wave_period(bL,Zm,g,U)
+        k = wave_number(1/Tp,Zm,g)
+        Um = (pi*Hs/Tp/sinh(k*Zm))
+        aw = Tp*Um/(2*pi)
+        fw = 0.4*(aw/ko)^-0.75
+        τ = 1/2*1020*fw*Um^2
+
+    else
+
+        τ = 0
+
+    end 
+
+    return τ
+
+end
+
+# ╔═╡ ba40ece1-d612-49d3-9bc5-f91a5188496a
+md"### System Equations"
+
+# ╔═╡ 9f8ad4e9-cb41-42a6-b8cb-f2738fb550d2
+md"This function contains the time derivative equations for the state variables of the model as described in Lorenzo-Trueba and Mariotti 2017. It is in this form and syntax so that it can be solved with the OrdinaryDiffEq.jl package."
+
+# ╔═╡ 0ffac0ec-2c20-42fb-ac5d-b79d95f08c73
+function system_equations(du,u,p,t)
+
+    # Rate of Sea Level Rise
+
+    zdot = p[1]
+
+    # Barrier Island Parameters
+
+    αe = p[2]
+    bbmc = p[3]
+    Dt = p[4]
+    He = p[5]
+    K = p[6]
+    Qow_max = p[7]
+    We = p[8]
+    Vd_max = p[9]
+
+    # Marsh-Lagoon Parameters
+
+    β = p[10]
+    Bpeak = p[11]
+    χref = p[12]
+    Co = p[13]
+    Dmin = p[14] 
+    g = p[15]
+    ka = p[16]
+    ke = p[17]
+    ko = p[18]
+    λ = p[19]
+    νGp = p[20]
+    P = p[21]
+    por = p[22]
+    r = p[23]
+    ρ = p[24]
+    ρo = p[25]
+    τcr = p[26]
+    U = p[27]
+    ws = p[28] 
+    x = p[29]
+
+    # Sea Level 
+
+    Z = u[1]
+
+    # Barrier Island State Variable
+
+    xt = u[2]
+    xs = u[3]
+    H = u[4]
+    xb = u[5]
+
+    # Marsh-Lagoon State Variables
+
+    xbm = u[6]
+    xim = u[7]
+    xmm = u[8]
+    zm = u[9]
+    zL = u[10]
+
+    # Additional Variable Calculations
+
+    α = Dt/(xs-xt)
+    W = xb-xs
+    bbm = xbm-xb
+    bL = xim-xbm
+    bim = xmm-xim
+    Dmax = 0.7167*r-0.0483
+
+    # Barrier Island
+
+        # Deficit Volume Calculations 
+
+        ϕ = min(1,bbm/bbmc)
+        Vd_B = max(0,(We-W)*(H+ϕ*(zm-r/2)+(1-ϕ)*(zL-r/2)))
+        Vd_H = max(0,(He-H)*(W))
+        Vd = Vd_B+Vd_H
+
+        # Overwash Calculations
+
+        if Vd<Vd_max
+
+            Qow_H = Qow_max*Vd_H/Vd_max
+            Qow_B = Qow_max*Vd_B/Vd_max
+
+        else 
+
+            Qow_H = Qow_max*Vd_H/Vd
+            Qow_B = Qow_max*Vd_B/Vd
+
+        end
+
+        Qow = Qow_H+Qow_B
+        Qow_Bl = (1-ϕ)*Qow_B
+        Qow_Bm = ϕ*Qow_B
+
+        # Sediment Flux at the Shoreface
+        
+        Qsf = K*(αe-α)
+
+    # Marsh-Lagoon
+
+        # Lagoon 
+
+        ZL = (zL+(zL-min(r,zL)))/2
+        τL = lagoon_bed_shear_stress(bL,ZL,g,ko,U)
+        SL = max((τL-τcr)/τcr,0)
+        Cr = ρ*λ*SL/(1+SL*λ)
+        Fc = (Cr-Co)*min(r,zL)/P/ρ
+
+        # Marshes
+
+        Zm = (zm+(zm-min(r,zm)))/2
+        B = Bpeak*(Dmax-zm)*(zm-Dmin)/(0.25*(Dmax-Dmin)^2)
+
+        if B <= 1*ℯ^-3
+
+            B = 0
+
+        end
+
+        Bfrac = B/Bpeak
+        AMC = 180*νGp*B
+        Rref = AMC*χref
+        O = 1/por*(Rref/ρo)
+
+        if Zm > 1*ℯ^-4
+
+            τm = marsh_bed_shear_stress(bL,Zm,Bfrac,g,ko,U)
+
+        else
+
+            τm = 0 
+
+        end
+
+        Sm = max((τm-τcr)/τcr,0)
+        Cm = ρ*λ*Sm/(1+Sm*λ)
+        Fm = (Cr-Cm)*min(r,zm)/P/ρ
+
+        # Marsh-Lagoon Edges
+
+        zs = zm+(zL-zm)*(1-exp(-x*0.1/zL))
+        Zs = (zs+(zs-min(r,zs)))/2
+        WP = wave_power(bL,Zs,g,U)
+        E = ke*WP/(zs-zm)-ka*Cr*ws/ρ
+
+    # State Equations
+
+        # Sea Level
+
+        du[1] = zdot
+
+        # Barrier Island
+
+        du[2] = 4*Qsf*((H+Dt)/(Dt*(2*H+Dt)))+2*zdot/α
+        du[3] = (2*Qow/(2*H+Dt)-4*Qsf*((H+Dt)/(2*H+Dt)^2))
+        du[4] = Qow_H/W-zdot
+        du[5] = Qow_Bm/(H+zm-r/2)
+
+        # Marsh-Lagoon
+
+        du[6] = -E+Qow_Bl/(zL-zm)
+        du[7] = E
+        du[8] = (Fm+O)/β
+        du[9] = -Fm-O+zdot
+        du[10] = -2*E*(zL-zm)/bL+Fm*(bbm+bim)/bL+Fc+zdot
+
+    nothing
+
+end
+
+# ╔═╡ 4dc1a9de-dfb8-4870-810a-f9dd0c9fead6
+md"### Events Function"
+
+# ╔═╡ 6b3e71a4-c87d-4c10-a1b9-8c664da3d606
+md"This function describes events that are physically meaningful with respect to the system (i.e marsh eroding, drowning, or filling and barrier drowning). This function includes both conditons and what effects the integrator should have on the state variables or model when those conditons are met."
+
+# ╔═╡ a927eb5c-f6fa-45d5-abfe-0dfebf1d4621
+function events(r)
+
+    function condition1(out, u, t, integrator)
+
+        out[1] = u[5]-u[3]  # Barrier Marsh Drowning
+        out[2] = u[6]-u[5]  # Back Barrier Marsh Erosion
+        out[3] = u[8]-u[7]  # Inland Marsh Erosion
+        out[4] = r-u[9]  	# Marsh Drowning
+        out[5] = u[7]-u[6]  # Marsh Filling 
+    
+
+    end
+
+    function affect1!(integrator, idx)
+
+        if idx == 1
+            
+            terminate!(integrator)
+            println("Barrier Drowned at t = ", integrator.t)
+
+        elseif idx == 2
+            
+            println("Barrier Marsh Eroded at t = ", integrator.t)
+
+        elseif idx == 3
+
+            println("Inland Marsh Eroded at t = ", integrator.t)
+
+        elseif idx == 4
+
+            terminate!(integrator)
+            println("Marsh Drowned at t = ", integrator.t)
+
+        elseif idx == 5
+
+            terminate!(integrator)
+            println("Marsh Filled at t = ", integrator.t)
+            
+        end
+
+    end
+
+    cb1 = VectorContinuousCallback(condition1,affect1!,5)
+
+    function condition2(u, t, integrator)
+
+        u[6] <= u[5]
+
+    end
+
+    function affect2!(integrator)
+
+        integrator.u[6] = integrator.u[5]
+
+    end
+
+    cb2 = DiscreteCallback(condition2, affect2!)
+
+    function condition3(u, t, integrator)
+
+        u[7] >= u[8]
+
+    end
+
+    function affect3!(integrator)
+
+        integrator.u[7] = integrator.u[8]
+
+    end
+
+    cb3 = DiscreteCallback(condition3, affect3!)
+
+    # Creating Callback Set
+
+    cbs = CallbackSet(cb1,cb2,cb3)
+
+    return cbs
+
+end
+
+# ╔═╡ 5383813d-ea49-42cd-bc14-4f99ccff3a45
+md"# Barrier-Back Barrier Model Solution"
+
+# ╔═╡ 730c029d-8f21-410a-89b1-f6e8100ffefd
+md"### Computational Parameters"
+
+# ╔═╡ 41eb8eac-96a2-49c5-a3a6-77879ba633da
+begin
+
+	TimeSpan = @bind tf Slider(50.0:1000.0,default = 500,show_value = true)
+	md"Time Span : $(TimeSpan)"
+
+end
+
+
+# ╔═╡ cdf6f2d2-5d9f-4d2d-a35a-c0ff44dc2d27
+begin 
+	
+	h = (tf)/100000
+
+	md"Time Step Size = $(h) years"
+
+end
+
+# ╔═╡ 070157e5-fc32-4469-a819-03908b3fa8d7
+md"### Model Parameters"
+
+# ╔═╡ f8fc2e69-13b8-449c-9f93-e53efc482f1b
+begin 
+
+	zdot_slid = @bind zdot Slider(0.0:15.0,default = 5.0,show_value = true)
+	r_slid = @bind r Slider(0.5:0.1:3.0,default = 1.4,show_value = true)
+	Qow_max_slid = @bind Qow_max Slider(10.0:10:150.0,default = 100,show_value = true)
+	Co_slid = @bind Co Slider(0.0:5.0:150,default = 30.0,show_value = true)
+	β_slid = @bind β Slider(-5:-2,default = -3,show_value = true)
+	β_check = @bind vertslope CheckBox(default = true)
+
+	
+	md"Relative Sea Level Rise Rate = $(zdot_slid) mm/yr \
+	Tidal Range = $(r_slid) m \
+	Maximum Overwash Sediment Flux = $(Qow_max_slid) m^3/m/yr \
+	Sediment Concentration in the Open Ocean = $(Co_slid) mg/L \
+	Mainland Slope = $(β_slid) 10^x \
+	$(β_check) Vertical Slope"
+	
+end
+
+# ╔═╡ f03601d2-e6dd-4947-a153-c283c53ff217
+md"### Initial Conditions"
+
+# ╔═╡ 53fa604a-69de-4a40-9573-313786797194
+begin 
+
+	bL0_slid = @bind bL0 Slider(5.0:30.0,default = 10.0,show_value = true)
+
+	md"Initial Lagoon Width = $(bL0_slid)"
+
+end
+
+# ╔═╡ 9ce8eb3f-f6c6-4a96-90bc-6e2a871339e8
+md"### Model Parameters Vector"
+
+# ╔═╡ dc7581b4-c184-40e4-a2aa-ab41a9d8e4d0
+begin 
+
+	# Barrier Dynamics Parameters
+	
+	αe = 0.02
+	bbmc = 1000
+	Dt = 10
+	He = 2
+	K = 2000
+	We = 800
+	Vd_max = He*We
+
+	# Marsh-Lagoon Dynamics Parameters
+
+	Bpeak = 2.5
+	χref = 0.158
+	Dmin = 0 
+	g = 9.80171
+	ka = 2 
+	ke = 0.15
+	ko = 0.001
+	λ = 0.0001
+	νGp = 0.0138
+	P = 12.5/(24*365)
+	por = 1000/2650
+	ρ = 1000
+	ρo = 1000
+	τcr = 0.1
+	U = 10
+	ws = 0.5*10^-3*(60*60*24*365)
+	x = 10
+
+	if vertslope == true
+
+		p = [zdot/10^3 αe bbmc Dt He K Qow_max We Vd_max 10^10 Bpeak χref Co/10^3 Dmin g ka ke ko λ νGp P por r ρ ρo τcr U ws x]
+
+	else
+
+		p = [zdot/10^3 αe bbmc Dt He K Qow_max We Vd_max 10.0^β Bpeak χref Co/10^3 Dmin g ka ke ko λ νGp P por r ρ ρo τcr U ws x]
+
+	end
+	
+end
+
+# ╔═╡ dcbf3167-2b2a-49e0-86ff-df9ddcf2a623
+md"### Initial Conditions Vector"
+
+# ╔═╡ f85ca086-1f45-4674-a5f0-b1667f8f2b8f
+begin 
+
+	# Sea Level Initial Condition
+
+	Z0 = Dt
+
+	# Barrier Island Intital Conditions
+
+	xt0 = 0
+	xs0 = Dt/αe
+	H0 = He
+	xb0 = Dt/αe+We
+
+	# Marsh-Lagoon Initial Conditions
+
+	bbm0 = 1000
+	bim0 = 2000
+	zm0 = (0.7167*r-0.0483)/2
+
+	if r >= 2
+		
+		zL0 = r+0.1
+		
+	else
+		
+		zL0 = 2
+		
+	end
+	
+	xbm0 = xb0+bbm0
+	xim0 = xb0+bbm0+bL0*10^3
+	xmm0 = xb0+bbm0+bL0*10^3+bim0-(zm0-r/2)/p[10]
+
+	u0 = [Z0 xt0 xs0 H0 xb0 xbm0 xim0 xmm0 zm0 zL0]
+
+end
+
+# ╔═╡ d51753dc-9a6e-4769-a8f6-c92db457ed5d
+md"### Solving System of Equations"
+
+# ╔═╡ 087eabbb-463a-4493-a87c-49952b51c38f
+begin
+	
+	# Solving System of ODE's
+	
+	prob = ODEProblem(system_equations,u0,(0,tf),p)
+	sol = solve(prob,Tsit5(),adaptive = false,dt = h,callback = events(r))
+
+	# Solution Vectors
+    
+	Z = sol[1,:]
+	xt = sol[2,:]
+	xs = sol[3,:]
+	H = sol[4,:]
+	xb = sol[5,:]
+	xbm = sol[6,:]
+	xim = sol[7,:]
+	xmm = sol[8,:]
+	zm = sol[9,:]
+	zL = sol[10,:]
+
+	# Plotting Idealized Geometry
+
+	plot(
+		
+        label = "HH",
+        xlims = (0,(xmm[length(Z)]/10^3+1)),
+        xlabel = "Kilometers",
+        ylims = (0,(Z[length(Z)]+H[length(Z)]+5)),
+        ylabel = "Meters",
+        framestyle = :box,
+        legend = :bottomright,
+        legend_columns = 1,
+        legendfontsize = 8,
+        foreground_color_legend = nothing,
+        background_color_legend = nothing,
+        grid = false,
+
+    )
+
+	# Initial Geometry
+
+	plot!([0,xs[1]]/10^3,[Z[1],Z[1]],
+
+		label = false,
+        linestyle = :dash,
+        linewidth = 1,
+        linecolor = :lightgrey
+    
+    )
+
+	plot!([xbm[1],xim[1]]/10^3,[Z[1],Z[1]],
+    
+    label = false,
+    linestyle = :dash,
+    linewidth = 1,
+    linecolor = :lightgrey
+    
+    )
+
+    plot!([xt[1],xs[1],xs[1],xb[1],xb[1]]/10^3,[Z[1]-Dt,Z[1],Z[1]+H[1],Z[1]+H[1],Z[1]+r/2-zm[1]],
+    
+        label = "Initial Geometry",
+        linestyle = :solid,
+        linewidth = 1,
+        linecolor = :lightgrey
+        
+    )
+
+    plot!([xb[1],xbm[1]]/10^3,[Z[1]+r/2-zm[1],Z[1]+r/2-zm[1]],
+    
+        label = false,
+        linestyle = :solid,
+        linewidth = 1,
+        linecolor = :lightgrey
+        
+    )
+
+    plot!([xim[1],xmm[1]]/10^3,[Z[1]+r/2-zm[1],Z[1]+r/2-zm[1]],
+    
+        label = false,
+        linestyle = :solid,
+        linewidth = 1,
+        linecolor = :lightgrey
+        
+    )
+
+    plot!([xbm[1],xbm[1],xim[1],xim[1]]/10^3,[Z[1]+r/2-zm[1],Z[1]+r/2-zL[1],Z[1]+r/2-zL[1],Z[1]+r/2-zm[1]],
+    
+        label = false,
+        linestyle = :solid,
+        linewidth = 1,
+        linecolor = :lightgrey
+        
+    )
+
+    plot!([xmm[1],xmm[length(Z)]+1000]/10^3,[Z[1]+r/2-zm[1],(Z[length(Z)]+r/2-zm[length(Z)])+p[10]*(1000)],
+    
+        label = false,
+        linestyle = :solid,
+        linewidth = 1,
+        linecolor = :lightgrey
+
+    )
+
+	# Final Geometry
+
+	plot!([0,xs[end]]/10^3,[Z[end],Z[end]],
+
+		label = "Mean Sea Level",
+        linestyle = :dash,
+        linewidth = 1.5,
+        linecolor = :lightblue
+    
+    )
+
+	plot!([xbm[end],xim[end]]/10^3,[Z[end],Z[end]],
+    
+    	label = false,
+    	linestyle = :dash,
+    	linewidth = 1.5,
+    	linecolor = :lightblue
+    
+    )
+
+
+    plot!([xt[end],xs[end],xs[end],xb[end],xb[end]]/10^3,[Z[end]-Dt,Z[end],Z[end]+H[end],Z[end]+H[end],Z[end]+r/2-zm[end]],
+    
+        label = false,
+        linestyle = :solid,
+        linewidth = 1.5,
+        linecolor = :tan
+        
+    )
+
+    plot!([xb[end],xbm[end]]/10^3,[Z[end]+r/2-zm[end],Z[end]+r/2-zm[end]],
+    
+        label = "Marshes",
+        linestyle = :solid,
+        linewidth = 1.5,
+        linecolor = :green
+        
+    )
+
+    plot!([xim[end],xmm[end]]/10^3,[Z[end]+r/2-zm[end],Z[end]+r/2-zm[end]],
+    
+        label = false,
+        linestyle = :solid,
+        linewidth = 1.5,
+        linecolor = :green
+        
+    )
+
+    plot!([xbm[end],xbm[end],xim[end],xim[end]]/10^3,[Z[end]+r/2-zm[end],Z[end]+r/2-zL[end],Z[end]+r/2-zL[end],Z[end]+r/2-zm[end]],
+    
+        label = false,
+        linestyle = :solid,
+        linewidth = 1.5,
+        linecolor = :tan
+        
+    )
+
+    plot!([xmm[end],xmm[length(Z)]+1000]/10^3,[Z[end]+r/2-zm[end],(Z[length(Z)]+r/2-zm[length(Z)])+p[10]*(1000)],
+    
+        label = false,
+        linestyle = :solid,
+        linewidth = 1.5,
+        linecolor = :black
+
+    )
+
+	plot!(xt[1:end]./10^3,(Z[1:end].-Dt),
+    
+        label = false,
+        linestyle = :dash,
+        linewidth = 1.5,
+        linecolor = :tan
+        
+    )
+
+end
+
+# ╔═╡ 21fd3c74-649b-4381-bf86-afc6a9ef99ad
+begin
+
+	plt1 = plot(sol.t,xbm-xb,
+
+    	title = "Back Barrier Marsh Width",
+    	xlabel = "Years",
+    	ylabel = "Meters",
+   		legend = false,
+    	grid = false,
+    	linestyle = :solid,
+    	linewidth = 1,
+    	linecolor = :black,
+
+	)
+	
+	plt2 = plot(sol.t,(xim-xbm)/10^3,
+
+    	title = "Lagoon Width",
+    	xlabel = "Years",
+    	ylabel = "Kilometers",
+    	legend = false,
+    	grid = false,
+    	linestyle = :solid,
+    	linewidth = 1,
+    	linecolor = :black,
+
+	)
+
+	plt3 = plot(sol.t,xb-xs,
+
+    	title = "Barrier Width",
+    	xlabel = "Years",
+    	ylabel = "Meters",
+    	legend = false,
+    	grid = false,
+    	linestyle = :solid,
+    	linewidth = 1,
+    	linecolor = :black,
+
+	)
+
+	plt4 = plot(sol.t,zL,
+
+    	title = "Lagoon Depth",
+    	xlabel = "Years",
+    	ylabel = "Meters",
+    	legend = false,
+    	grid = false,
+    	linestyle = :solid,
+    	linewidth = 1,
+    	linecolor = :black,
+
+	)	
+
+	plot(plt1,plt2,plt3,plt4,layout=(2,2))
+
+end
+
+# ╔═╡ 00000000-0000-0000-0000-000000000001
+PLUTO_PROJECT_TOML_CONTENTS = """
+[deps]
+OrdinaryDiffEq = "1dea7af3-3e70-54e6-95c3-0bf5283fa5ed"
+Plots = "91a5bcdd-55d7-5caf-9e0b-520d859cae80"
+PlutoUI = "7f904dfe-b85e-4ff6-b463-dae2292396a8"
+
+[compat]
+OrdinaryDiffEq = "~6.90.1"
+Plots = "~1.40.9"
+PlutoUI = "~0.7.61"
+"""
+
+# ╔═╡ 00000000-0000-0000-0000-000000000002
+PLUTO_MANIFEST_TOML_CONTENTS = """
 # This file is machine-generated - editing it directly is not advised
 
 julia_version = "1.11.3"
 manifest_format = "2.0"
-project_hash = "220fafb06e6012aa9e60ede7e1af703fce40d163"
+project_hash = "a331d345f846e5be5cc707393c6581ed6667b00b"
 
 [[deps.ADTypes]]
 git-tree-sha1 = "72af59f5b8f09faee36b4ec48e014a79210f2f4f"
@@ -147,7 +974,7 @@ weakdeps = ["ForwardDiff"]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
 git-tree-sha1 = "8873e196c2eb87962a2048b3b8e08946535864a1"
 uuid = "6e34b625-4abd-537c-b88f-471c36dfa7a0"
-version = "1.0.8+2"
+version = "1.0.8+4"
 
 [[deps.CPUSummary]]
 deps = ["CpuId", "IfElse", "PrecompileTools", "Static"]
@@ -207,9 +1034,9 @@ weakdeps = ["SpecialFunctions"]
 
 [[deps.Colors]]
 deps = ["ColorTypes", "FixedPointNumbers", "Reexport"]
-git-tree-sha1 = "362a287c3aa50601b0bc359053d5c2468f0e7ce0"
+git-tree-sha1 = "64e15186f0aa277e174aa81798f7eb8598e0157e"
 uuid = "5ae59095-9a9b-59fe-a467-6f913c188581"
-version = "0.12.11"
+version = "0.13.0"
 
 [[deps.CommonSolve]]
 git-tree-sha1 = "0eee5eb66b1cf62cd6ad1b460238e60e4b09400c"
@@ -261,18 +1088,6 @@ deps = ["Serialization", "Sockets"]
 git-tree-sha1 = "f36e5e8fdffcb5646ea5da81495a5a7566005127"
 uuid = "f0e56b4a-5159-44fe-b623-3e5288b988bb"
 version = "2.4.3"
-
-[[deps.Conda]]
-deps = ["Downloads", "JSON", "VersionParsing"]
-git-tree-sha1 = "b19db3927f0db4151cb86d073689f2428e524576"
-uuid = "8f4d0f93-b110-5947-807f-2305c1781a2d"
-version = "1.10.2"
-
-[[deps.Configurations]]
-deps = ["ExproniconLite", "OrderedCollections", "TOML"]
-git-tree-sha1 = "4358750bb58a3caefd5f37a4a0c5bfdbbf075252"
-uuid = "5218b696-f38b-4ac9-8b61-a12ec717816d"
-version = "0.17.6"
 
 [[deps.ConstructionBase]]
 git-tree-sha1 = "76219f1ed5771adbb096743bff43fb5fdd4c1157"
@@ -469,7 +1284,7 @@ version = "0.1.11"
 deps = ["Artifacts", "JLLWrappers", "Libdl"]
 git-tree-sha1 = "e51db81749b0777b2147fbe7b783ee79045b8e99"
 uuid = "2e619515-83b5-522b-bb60-26c02a35a201"
-version = "2.6.4+1"
+version = "2.6.4+3"
 
 [[deps.ExponentialUtilities]]
 deps = ["Adapt", "ArrayInterface", "GPUArraysCore", "GenericSchur", "LinearAlgebra", "PrecompileTools", "Printf", "SparseArrays", "libblastrampoline_jll"]
@@ -486,21 +1301,11 @@ git-tree-sha1 = "27415f162e6028e81c72b82ef756bf321213b6ec"
 uuid = "e2ba6199-217a-4e67-a87a-7c52f15ade04"
 version = "0.1.10"
 
-[[deps.ExpressionExplorer]]
-git-tree-sha1 = "71d0768dd78ad62d3582091bf338d98af8bbda67"
-uuid = "21656369-7473-754a-2065-74616d696c43"
-version = "1.1.1"
-
 [[deps.Expronicon]]
 deps = ["MLStyle", "Pkg", "TOML"]
 git-tree-sha1 = "fc3951d4d398b5515f91d7fe5d45fc31dccb3c9b"
 uuid = "6b7a57c9-7cc1-4fdf-b7f5-e857abae3636"
 version = "0.8.5"
-
-[[deps.ExproniconLite]]
-git-tree-sha1 = "c13f0b150373771b0fdc1713c97860f8df12e6c2"
-uuid = "55351af7-c7e9-48d6-89ff-24e801d99491"
-version = "0.10.14"
 
 [[deps.FFMPEG]]
 deps = ["FFMPEG_jll"]
@@ -651,12 +1456,6 @@ deps = ["Random"]
 uuid = "9fa8497b-333b-5362-9e8d-4d0656e87820"
 version = "1.11.0"
 
-[[deps.FuzzyCompletions]]
-deps = ["REPL"]
-git-tree-sha1 = "be713866335f48cfb1285bff2d0cbb8304c1701c"
-uuid = "fb4132e2-a121-4a70-b8a1-d5b831dcdcc2"
-version = "0.5.5"
-
 [[deps.GLFW_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Libglvnd_jll", "Xorg_libXcursor_jll", "Xorg_libXi_jll", "Xorg_libXinerama_jll", "Xorg_libXrandr_jll", "libdecor_jll", "xkbcommon_jll"]
 git-tree-sha1 = "fcb0584ff34e25155876418979d4c8971243bb89"
@@ -671,15 +1470,15 @@ version = "0.2.0"
 
 [[deps.GR]]
 deps = ["Artifacts", "Base64", "DelimitedFiles", "Downloads", "GR_jll", "HTTP", "JSON", "Libdl", "LinearAlgebra", "Preferences", "Printf", "Qt6Wayland_jll", "Random", "Serialization", "Sockets", "TOML", "Tar", "Test", "p7zip_jll"]
-git-tree-sha1 = "52adc6828958ea8a0cf923d53aa10773dbca7d5f"
+git-tree-sha1 = "424c8f76017e39fdfcdbb5935a8e6742244959e8"
 uuid = "28b8d3ca-fb5f-59d9-8090-bfdbd6d07a71"
-version = "0.73.9"
+version = "0.73.10"
 
 [[deps.GR_jll]]
 deps = ["Artifacts", "Bzip2_jll", "Cairo_jll", "FFMPEG_jll", "Fontconfig_jll", "FreeType2_jll", "GLFW_jll", "JLLWrappers", "JpegTurbo_jll", "Libdl", "Libtiff_jll", "Pixman_jll", "Qt6Base_jll", "Zlib_jll", "libpng_jll"]
-git-tree-sha1 = "4e9e2966af45b06f24fd952285841428f1d6e858"
+git-tree-sha1 = "b90934c8cb33920a8dc66736471dc3961b42ec9f"
 uuid = "d2c73de3-f751-5644-a686-071e5b155ba9"
-version = "0.73.9+0"
+version = "0.73.10+0"
 
 [[deps.GenericSchur]]
 deps = ["LinearAlgebra", "Printf"]
@@ -801,9 +1600,9 @@ version = "0.1.9"
 
 [[deps.JLLWrappers]]
 deps = ["Artifacts", "Preferences"]
-git-tree-sha1 = "be3dc50a92e5a386872a493a10050136d4703f9b"
+git-tree-sha1 = "a007feb38b422fbdab534406aeca1b86823cb4d6"
 uuid = "692b3bcd-3c85-4b1f-b108-f13ce0eb3210"
-version = "1.6.1"
+version = "1.7.0"
 
 [[deps.JSON]]
 deps = ["Dates", "Mmap", "Parsers", "Unicode"]
@@ -813,9 +1612,9 @@ version = "0.21.4"
 
 [[deps.JpegTurbo_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl"]
-git-tree-sha1 = "ef10afc9f4b942bcd75f4c3bc9d9e8d802944c23"
+git-tree-sha1 = "eac1206917768cb54957c65a615460d87b455fc1"
 uuid = "aacddb02-875f-59d6-b918-886e6ef4fbf8"
-version = "3.1.0+0"
+version = "3.1.1+0"
 
 [[deps.KLU]]
 deps = ["LinearAlgebra", "SparseArrays", "SuiteSparse_jll"]
@@ -837,9 +1636,9 @@ version = "3.100.2+0"
 
 [[deps.LERC_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl"]
-git-tree-sha1 = "4ec1e8fac04150b570e315baaa68950e368a803d"
+git-tree-sha1 = "aaafe88dccbd957a8d82f7d05be9b69172e0cee3"
 uuid = "88015f11-f218-50d7-93a8-a6af411a945d"
-version = "4.0.0+1"
+version = "4.0.1+0"
 
 [[deps.LLVMOpenMP_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl"]
@@ -849,9 +1648,9 @@ version = "18.1.7+0"
 
 [[deps.LZO_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl"]
-git-tree-sha1 = "854a9c268c43b77b0a27f22d7fab8d33cdb3a731"
+git-tree-sha1 = "1c602b1127f4751facb671441ca72715cc95938a"
 uuid = "dd4b983a-f0e5-5f8d-a1b7-129d4a5fb1ac"
-version = "2.10.2+1"
+version = "2.10.3+0"
 
 [[deps.LaTeXStrings]]
 git-tree-sha1 = "dda21b8cbd6a6c40d9d02a73230f9d70fed6918c"
@@ -879,11 +1678,6 @@ deps = ["ArrayInterface", "LinearAlgebra", "ManualMemory", "SIMDTypes", "Static"
 git-tree-sha1 = "a9eaadb366f5493a5654e843864c13d8b107548c"
 uuid = "10f19ff3-798f-405d-979b-55457f8fc047"
 version = "0.1.17"
-
-[[deps.LazilyInitializedFields]]
-git-tree-sha1 = "0f2da712350b020bc3957f269c9caad516383ee0"
-uuid = "0e77f7df-68c5-4e49-93ce-4cd80f5598bf"
-version = "1.3.0"
 
 [[deps.LazyArrays]]
 deps = ["ArrayLayouts", "FillArrays", "LinearAlgebra", "MacroTools", "SparseArrays"]
@@ -957,33 +1751,33 @@ version = "1.7.0+0"
 
 [[deps.Libgpg_error_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl"]
-git-tree-sha1 = "a7f43994b47130e4f491c3b2dbe78fe9e2aed2b3"
+git-tree-sha1 = "df37206100d39f79b3376afb6b9cee4970041c61"
 uuid = "7add5ba3-2f88-524e-9cd5-f83b8a55f7b8"
-version = "1.51.0+0"
+version = "1.51.1+0"
 
 [[deps.Libiconv_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl"]
-git-tree-sha1 = "61dfdba58e585066d8bce214c5a51eaa0539f269"
+git-tree-sha1 = "be484f5c92fad0bd8acfef35fe017900b0b73809"
 uuid = "94ce4f54-9a6c-5748-9c1c-f9c7231a4531"
-version = "1.17.0+1"
+version = "1.18.0+0"
 
 [[deps.Libmount_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl"]
-git-tree-sha1 = "84eef7acd508ee5b3e956a2ae51b05024181dee0"
+git-tree-sha1 = "89211ea35d9df5831fca5d33552c02bd33878419"
 uuid = "4b2f31a3-9ecc-558c-b454-b3730dcb73e9"
-version = "2.40.2+0"
+version = "2.40.3+0"
 
 [[deps.Libtiff_jll]]
 deps = ["Artifacts", "JLLWrappers", "JpegTurbo_jll", "LERC_jll", "Libdl", "XZ_jll", "Zlib_jll", "Zstd_jll"]
-git-tree-sha1 = "b404131d06f7886402758c9ce2214b636eb4d54a"
+git-tree-sha1 = "4ab7581296671007fc33f07a721631b8855f4b1d"
 uuid = "89763e89-9b03-5906-acba-b20f662cd828"
-version = "4.7.0+0"
+version = "4.7.1+0"
 
 [[deps.Libuuid_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl"]
-git-tree-sha1 = "edbf5309f9ddf1cab25afc344b1e8150b7c832f9"
+git-tree-sha1 = "e888ad02ce716b319e6bdb985d2ef300e7089889"
 uuid = "38a345b3-de98-5d2b-a5d3-14cd9215e700"
-version = "2.40.2+0"
+version = "2.40.3+0"
 
 [[deps.LineSearch]]
 deps = ["ADTypes", "CommonSolve", "ConcreteStructs", "FastClosures", "LinearAlgebra", "MaybeInplace", "SciMLBase", "SciMLJacobianOperators", "StaticArraysCore"]
@@ -1096,16 +1890,9 @@ uuid = "d8e11817-5142-5d16-987a-aa16d5891078"
 version = "0.4.17"
 
 [[deps.MacroTools]]
-deps = ["Markdown", "Random"]
-git-tree-sha1 = "2fa9ee3e63fd3a4f7a9a4f4744a52f4856de82df"
+git-tree-sha1 = "72aebe0b5051e5143a079a4685a46da330a40472"
 uuid = "1914dd2f-81c6-5fcd-8719-6d5c9610ff09"
-version = "0.5.13"
-
-[[deps.Malt]]
-deps = ["Distributed", "Logging", "RelocatableFolders", "Serialization", "Sockets"]
-git-tree-sha1 = "02a728ada9d6caae583a0f87c1dd3844f99ec3fd"
-uuid = "36869731-bdee-424d-aa32-cab38c994e3b"
-version = "1.1.2"
+version = "0.5.15"
 
 [[deps.ManualMemory]]
 git-tree-sha1 = "bcaef4fc7a0cfe2cba636d84cda54b5e4e4ca3cd"
@@ -1157,12 +1944,6 @@ version = "1.11.0"
 uuid = "14a3606d-f60d-562e-9121-12d972cd8159"
 version = "2023.12.12"
 
-[[deps.MsgPack]]
-deps = ["Serialization"]
-git-tree-sha1 = "f5db02ae992c260e4826fe78c942954b48e1d9c2"
-uuid = "99f44e22-a591-53d1-9472-aa23ef4bd671"
-version = "1.2.1"
-
 [[deps.MuladdMacro]]
 git-tree-sha1 = "cac9cc5499c25554cba55cd3c30543cff5ca4fab"
 uuid = "46d2c3a1-f734-5fdb-9937-b9b9aeba4221"
@@ -1176,9 +1957,9 @@ version = "7.8.3"
 
 [[deps.NaNMath]]
 deps = ["OpenLibm_jll"]
-git-tree-sha1 = "0877504529a3e5c3343c6f8b4c0381e57e4387e4"
+git-tree-sha1 = "030ea22804ef91648f29b7ad3fc15fa49d0e6e71"
 uuid = "77ba4419-2d1f-58cd-9bb1-8ffee604a2e3"
-version = "1.0.2"
+version = "1.0.3"
 
 [[deps.NetworkOptions]]
 uuid = "ca575930-c2e3-43a9-ace4-1e988b2c1908"
@@ -1301,13 +2082,13 @@ version = "1.4.3"
 deps = ["Artifacts", "JLLWrappers", "Libdl"]
 git-tree-sha1 = "7493f61f55a6cce7325f197443aa80d32554ba10"
 uuid = "458c3c95-2e84-50aa-8efc-19380b2a3a95"
-version = "3.0.15+1"
+version = "3.0.15+3"
 
 [[deps.OpenSpecFun_jll]]
 deps = ["Artifacts", "CompilerSupportLibraries_jll", "JLLWrappers", "Libdl", "Pkg"]
 git-tree-sha1 = "13652491f6856acfd2db29360e1bbcd4565d04f1"
 uuid = "efe28fd5-8261-553b-a9e1-b2916fc3738e"
-version = "0.5.5+0"
+version = "0.5.5+2"
 
 [[deps.Opus_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl"]
@@ -1591,18 +2372,6 @@ version = "1.40.9"
     ImageInTerminal = "d8c32880-2388-543b-8c61-d9f865259254"
     Unitful = "1986cc42-f94f-5a68-af5c-568840ba703d"
 
-[[deps.Pluto]]
-deps = ["Base64", "Configurations", "Dates", "Downloads", "ExpressionExplorer", "FileWatching", "FuzzyCompletions", "HTTP", "HypertextLiteral", "InteractiveUtils", "Logging", "LoggingExtras", "MIMEs", "Malt", "Markdown", "MsgPack", "Pkg", "PlutoDependencyExplorer", "PrecompileSignatures", "PrecompileTools", "REPL", "RegistryInstances", "RelocatableFolders", "Scratch", "Sockets", "TOML", "Tables", "URIs", "UUIDs"]
-git-tree-sha1 = "b5509a2e4d4c189da505b780e3f447d1e38a0350"
-uuid = "c3e4b0f8-55cb-11ea-2926-15256bba5781"
-version = "0.20.4"
-
-[[deps.PlutoDependencyExplorer]]
-deps = ["ExpressionExplorer", "InteractiveUtils", "Markdown"]
-git-tree-sha1 = "e0864c15334d2c4bac8137ce3359f1174565e719"
-uuid = "72656b73-756c-7461-726b-72656b6b696b"
-version = "1.2.0"
-
 [[deps.PlutoUI]]
 deps = ["AbstractPlutoDingetjes", "Base64", "ColorTypes", "Dates", "FixedPointNumbers", "Hyperscript", "HypertextLiteral", "IOCapture", "InteractiveUtils", "JSON", "Logging", "MIMEs", "Markdown", "Random", "Reexport", "URIs", "UUIDs"]
 git-tree-sha1 = "7e71a55b87222942f0f9337be62e26b1f103d3e4"
@@ -1633,11 +2402,6 @@ version = "0.4.24"
     [deps.PreallocationTools.weakdeps]
     ReverseDiff = "37e2e3b7-166d-5795-8a7a-e32c996b4267"
 
-[[deps.PrecompileSignatures]]
-git-tree-sha1 = "18ef344185f25ee9d51d80e179f8dad33dc48eb1"
-uuid = "91cefc8d-f054-46dc-8f8c-26e11d7c5411"
-version = "3.0.3"
-
 [[deps.PrecompileTools]]
 deps = ["Preferences"]
 git-tree-sha1 = "5aa36f7049a63a1528fe8f7c3f2113413ffd4e1f"
@@ -1656,21 +2420,9 @@ uuid = "de0858da-6303-5e67-8744-51eddeeeb8d7"
 version = "1.11.0"
 
 [[deps.PtrArrays]]
-git-tree-sha1 = "77a42d78b6a92df47ab37e177b2deac405e1c88f"
+git-tree-sha1 = "1d36ef11a9aaf1e8b74dacc6a731dd1de8fd493d"
 uuid = "43287f4e-b6f4-7ad1-bb20-aadabca52c3d"
-version = "1.2.1"
-
-[[deps.PyCall]]
-deps = ["Conda", "Dates", "Libdl", "LinearAlgebra", "MacroTools", "Serialization", "VersionParsing"]
-git-tree-sha1 = "9816a3826b0ebf49ab4926e2b18842ad8b5c8f04"
-uuid = "438e738f-606a-5dbb-bf0a-cddfbfd45ab0"
-version = "1.96.4"
-
-[[deps.PyPlot]]
-deps = ["Colors", "LaTeXStrings", "PyCall", "Sockets", "Test", "VersionParsing"]
-git-tree-sha1 = "0371ca706e3f295481cbf94c8c36692b072285c2"
-uuid = "d330b81b-6aea-500a-939a-2ce795aea3ee"
-version = "2.11.5"
+version = "1.3.0"
 
 [[deps.Qt6Base_jll]]
 deps = ["Artifacts", "CompilerSupportLibraries_jll", "Fontconfig_jll", "Glib_jll", "JLLWrappers", "Libdl", "Libglvnd_jll", "OpenSSL_jll", "Vulkan_Loader_jll", "Xorg_libSM_jll", "Xorg_libXext_jll", "Xorg_libXrender_jll", "Xorg_libxcb_jll", "Xorg_xcb_util_cursor_jll", "Xorg_xcb_util_image_jll", "Xorg_xcb_util_keysyms_jll", "Xorg_xcb_util_renderutil_jll", "Xorg_xcb_util_wm_jll", "Zlib_jll", "libinput_jll", "xkbcommon_jll"]
@@ -1756,12 +2508,6 @@ version = "0.2.23"
 git-tree-sha1 = "45e428421666073eab6f2da5c9d310d99bb12f9b"
 uuid = "189a3867-3050-52da-a836-e630ba90ab69"
 version = "1.2.2"
-
-[[deps.RegistryInstances]]
-deps = ["LazilyInitializedFields", "Pkg", "TOML", "Tar"]
-git-tree-sha1 = "ffd19052caf598b8653b99404058fce14828be51"
-uuid = "2792f1a3-b283-48e8-9a74-f99dce5104f3"
-version = "0.1.0"
 
 [[deps.RelocatableFolders]]
 deps = ["SHA", "Scratch"]
@@ -2142,9 +2888,9 @@ version = "0.4.1"
 
 [[deps.Unitful]]
 deps = ["Dates", "LinearAlgebra", "Random"]
-git-tree-sha1 = "01915bfcd62be15329c9a07235447a89d588327c"
+git-tree-sha1 = "c0667a8e676c53d390a09dc6870b3d8d6650e2bf"
 uuid = "1986cc42-f94f-5a68-af5c-568840ba703d"
-version = "1.21.1"
+version = "1.22.0"
 weakdeps = ["ConstructionBase", "InverseFunctions"]
 
     [deps.Unitful.extensions]
@@ -2168,11 +2914,6 @@ git-tree-sha1 = "4ab62a49f1d8d9548a1c8d1a75e5f55cf196f64e"
 uuid = "3d5dd08c-fd9d-11e8-17fa-ed2836048c2f"
 version = "0.21.71"
 
-[[deps.VersionParsing]]
-git-tree-sha1 = "58d6e80b4ee071f5efd07fda82cb9fbe17200868"
-uuid = "81def892-9a0e-5fdd-b105-ffc91e053289"
-version = "1.3.0"
-
 [[deps.VertexSafeGraphs]]
 deps = ["Graphs"]
 git-tree-sha1 = "8351f8d73d7e880bfc042a8b6922684ebeafb35c"
@@ -2193,9 +2934,9 @@ version = "1.21.0+2"
 
 [[deps.Wayland_protocols_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
-git-tree-sha1 = "93f43ab61b16ddfb2fd3bb13b3ce241cafb0e6c9"
+git-tree-sha1 = "5db3e9d307d32baba7067b13fc7b5aa6edd4a19a"
 uuid = "2381bf8a-dfd0-557d-9999-79630e7b1b91"
-version = "1.31.0+0"
+version = "1.36.0+0"
 
 [[deps.XML2_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Libiconv_jll", "Zlib_jll"]
@@ -2211,9 +2952,9 @@ version = "1.1.42+0"
 
 [[deps.XZ_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl"]
-git-tree-sha1 = "15e637a697345f6743674f1322beefbc5dcd5cfc"
+git-tree-sha1 = "beef98d5aad604d9e7d60b2ece5181f7888e2fd6"
 uuid = "ffd25f8a-64ca-5728-b0f7-c24cf3aae800"
-version = "5.6.3+0"
+version = "5.6.4+0"
 
 [[deps.Xorg_libICE_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl"]
@@ -2231,13 +2972,13 @@ version = "1.2.4+0"
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Xorg_libxcb_jll", "Xorg_xtrans_jll"]
 git-tree-sha1 = "9dafcee1d24c4f024e7edc92603cedba72118283"
 uuid = "4f6342f7-b3d2-589e-9d20-edeb45f2b2bc"
-version = "1.8.6+1"
+version = "1.8.6+3"
 
 [[deps.Xorg_libXau_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl"]
-git-tree-sha1 = "2b0e27d52ec9d8d483e2ca0b72b3cb1a8df5c27a"
+git-tree-sha1 = "e9216fdcd8514b7072b43653874fd688e4c6c003"
 uuid = "0c0b7dd1-d40b-584c-a123-a41640f87eec"
-version = "1.0.11+1"
+version = "1.0.12+0"
 
 [[deps.Xorg_libXcursor_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Xorg_libXfixes_jll", "Xorg_libXrender_jll"]
@@ -2247,15 +2988,15 @@ version = "1.2.3+0"
 
 [[deps.Xorg_libXdmcp_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl"]
-git-tree-sha1 = "02054ee01980c90297412e4c809c8694d7323af3"
+git-tree-sha1 = "89799ae67c17caa5b3b5a19b8469eeee474377db"
 uuid = "a3789734-cfe1-5b06-b2d0-1dd0d9d62d05"
-version = "1.1.4+1"
+version = "1.1.5+0"
 
 [[deps.Xorg_libXext_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Xorg_libX11_jll"]
 git-tree-sha1 = "d7155fea91a4123ef59f42c4afb5ab3b4ca95058"
 uuid = "1082639a-0dae-5f34-9b06-72781eeb8cb3"
-version = "1.3.6+1"
+version = "1.3.6+3"
 
 [[deps.Xorg_libXfixes_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Xorg_libX11_jll"]
@@ -2289,15 +3030,15 @@ version = "0.9.11+1"
 
 [[deps.Xorg_libpthread_stubs_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl"]
-git-tree-sha1 = "fee57a273563e273f0f53275101cd41a8153517a"
+git-tree-sha1 = "c57201109a9e4c0585b208bb408bc41d205ac4e9"
 uuid = "14d82f49-176c-5ed1-bb49-ad3f5cbd8c74"
-version = "0.1.1+1"
+version = "0.1.2+0"
 
 [[deps.Xorg_libxcb_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "XSLT_jll", "Xorg_libXau_jll", "Xorg_libXdmcp_jll", "Xorg_libpthread_stubs_jll"]
 git-tree-sha1 = "1a74296303b6524a0472a8cb12d3d87a78eb3612"
 uuid = "c7cfdc94-dc32-55de-ac96-5a1b8d977c5b"
-version = "1.17.0+1"
+version = "1.17.0+3"
 
 [[deps.Xorg_libxkbfile_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Xorg_libX11_jll"]
@@ -2355,9 +3096,9 @@ version = "2.39.0+0"
 
 [[deps.Xorg_xtrans_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl"]
-git-tree-sha1 = "b9ead2d2bdb27330545eb14234a2e300da61232e"
+git-tree-sha1 = "6dba04dbfb72ae3ebe5418ba33d087ba8aa8cb00"
 uuid = "c5fb5394-a638-5e4d-96e5-b29de1b5cf10"
-version = "1.5.0+1"
+version = "1.5.1+0"
 
 [[deps.Zlib_jll]]
 deps = ["Libdl"]
@@ -2366,9 +3107,9 @@ version = "1.2.13+1"
 
 [[deps.Zstd_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl"]
-git-tree-sha1 = "555d1076590a6cc2fdee2ef1469451f872d8b41b"
+git-tree-sha1 = "622cf78670d067c738667aaa96c553430b65e269"
 uuid = "3161d3a3-bdf6-5164-811a-617609db77b4"
-version = "1.5.6+1"
+version = "1.5.7+0"
 
 [[deps.eudev_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg", "gperf_jll"]
@@ -2390,9 +3131,9 @@ version = "3.1.1+1"
 
 [[deps.libaom_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl"]
-git-tree-sha1 = "1827acba325fdcdf1d2647fc8d5301dd9ba43a9d"
+git-tree-sha1 = "522c1df09d05a71785765d19c9524661234738e9"
 uuid = "a4ae2306-e953-59d6-aa16-d00cac43593b"
-version = "3.9.0+0"
+version = "3.11.0+0"
 
 [[deps.libass_jll]]
 deps = ["Artifacts", "Bzip2_jll", "FreeType2_jll", "FriBidi_jll", "HarfBuzz_jll", "JLLWrappers", "Libdl", "Zlib_jll"]
@@ -2431,9 +3172,9 @@ version = "1.18.0+0"
 
 [[deps.libpng_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Zlib_jll"]
-git-tree-sha1 = "b70c870239dc3d7bc094eb2d6be9b73d27bef280"
+git-tree-sha1 = "d7b5bbf1efbafb5eca466700949625e07533aff2"
 uuid = "b53b4c65-9356-5827-b1ea-8c7a1a84506f"
-version = "1.6.44+0"
+version = "1.6.45+1"
 
 [[deps.libvorbis_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Ogg_jll", "Pkg"]
@@ -2480,3 +3221,49 @@ deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg", "Wayland_jll", "Wayland_prot
 git-tree-sha1 = "63406453ed9b33a0df95d570816d5366c92b7809"
 uuid = "d8fb68d0-12a3-5cfd-a85a-d49703b185fd"
 version = "1.4.1+2"
+"""
+
+# ╔═╡ Cell order:
+# ╠═26fde288-0ce8-4321-aa57-1ab8e6e2dd4e
+# ╟─bb225ac2-ec7e-11ef-3f68-cfc06bae79e5
+# ╟─a4b1949d-57b2-4a28-ab5b-5885e0cd2dda
+# ╟─1fa14124-582b-461f-b74a-1268de491d30
+# ╠═af3b4831-55dc-4fb5-87b0-b35e543cf67b
+# ╟─63249cae-12b0-4d3c-b5c8-9a73f202cd84
+# ╟─4a730b07-279c-4cf1-8846-eb2f8e65cac7
+# ╠═45c6afb4-02da-45e9-9132-cdcee9ee82ce
+# ╟─9b7f7fda-b02d-447a-a014-a6881cf21792
+# ╟─0847e53c-3144-48fd-8a99-d6f38bb73f89
+# ╠═46366d34-6c7d-4803-b3c5-522286c27618
+# ╟─b7111f0b-89ed-44c9-9523-1fa8802f0c75
+# ╟─1049abd7-189a-4495-b9a9-b8ae3a4a5db9
+# ╠═456e0470-5b61-4f04-949e-bccf031b0b54
+# ╟─ccc026dd-337c-4c57-b5b6-3ea7e7f46f99
+# ╟─c305c920-15d2-4f36-b3d8-35e67e10cb1b
+# ╠═47506695-57c3-4dda-b8e4-a458dfd46e10
+# ╟─b2ac4e4d-a3bf-44b4-8c8c-9014069d62ff
+# ╟─037b01a0-a7cb-4ac8-a102-4abea34161b2
+# ╠═279856ee-bd55-4b2d-a262-d0b9e31a178c
+# ╟─ba40ece1-d612-49d3-9bc5-f91a5188496a
+# ╟─9f8ad4e9-cb41-42a6-b8cb-f2738fb550d2
+# ╠═0ffac0ec-2c20-42fb-ac5d-b79d95f08c73
+# ╟─4dc1a9de-dfb8-4870-810a-f9dd0c9fead6
+# ╟─6b3e71a4-c87d-4c10-a1b9-8c664da3d606
+# ╠═a927eb5c-f6fa-45d5-abfe-0dfebf1d4621
+# ╟─5383813d-ea49-42cd-bc14-4f99ccff3a45
+# ╟─730c029d-8f21-410a-89b1-f6e8100ffefd
+# ╟─41eb8eac-96a2-49c5-a3a6-77879ba633da
+# ╟─cdf6f2d2-5d9f-4d2d-a35a-c0ff44dc2d27
+# ╟─070157e5-fc32-4469-a819-03908b3fa8d7
+# ╟─f8fc2e69-13b8-449c-9f93-e53efc482f1b
+# ╟─f03601d2-e6dd-4947-a153-c283c53ff217
+# ╟─53fa604a-69de-4a40-9573-313786797194
+# ╟─9ce8eb3f-f6c6-4a96-90bc-6e2a871339e8
+# ╟─dc7581b4-c184-40e4-a2aa-ab41a9d8e4d0
+# ╟─dcbf3167-2b2a-49e0-86ff-df9ddcf2a623
+# ╟─f85ca086-1f45-4674-a5f0-b1667f8f2b8f
+# ╟─d51753dc-9a6e-4769-a8f6-c92db457ed5d
+# ╟─087eabbb-463a-4493-a87c-49952b51c38f
+# ╟─21fd3c74-649b-4381-bf86-afc6a9ef99ad
+# ╟─00000000-0000-0000-0000-000000000001
+# ╟─00000000-0000-0000-0000-000000000002
