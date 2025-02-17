@@ -594,10 +594,9 @@ begin
 
 	plot(
 		
-        label = "HH",
         xlims = (0,(xmm[length(Z)]/10^3+1)),
         xlabel = "Kilometers",
-        ylims = (0,(Z[length(Z)]+H[length(Z)]+5)),
+        ylims = (0,(Z[length(Z)]+H[length(Z)]+1)),
         ylabel = "Meters",
         framestyle = :box,
         legend = :bottomright,
