@@ -427,7 +427,7 @@ md"### Computational Parameters"
 # ╔═╡ 41eb8eac-96a2-49c5-a3a6-77879ba633da
 begin
 
-	TimeSpan = @bind tf Slider(50.0:1000.0,default = 500,show_value = true)
+	TimeSpan = @bind tf Slider(50.0:1000.0,default = 1000.0,show_value = true)
 	md"Time Span : $(TimeSpan)"
 
 end
@@ -452,7 +452,7 @@ begin
 	r_slid = @bind r Slider(0.5:0.1:3.0,default = 1.4,show_value = true)
 	Qow_max_slid = @bind Qow_max Slider(10.0:150.0,default = 100,show_value = true)
 	Co_slid = @bind Co Slider(0.0:200,default = 30.0,show_value = true)
-	β_slid = @bind β Slider(-5:-2,default = -3,show_value = true)
+	β_slid = @bind β Slider(-4:-2,default = -3,show_value = true)
 	β_check = @bind vertslope CheckBox(default = true)
 
 	
