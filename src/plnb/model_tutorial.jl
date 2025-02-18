@@ -450,8 +450,8 @@ begin
 
 	zdot_slid = @bind zdot Slider(0.0:15.0,default = 5.0,show_value = true)
 	r_slid = @bind r Slider(0.5:0.1:3.0,default = 1.4,show_value = true)
-	Qow_max_slid = @bind Qow_max Slider(10.0:10:150.0,default = 100,show_value = true)
-	Co_slid = @bind Co Slider(0.0:5.0:150,default = 30.0,show_value = true)
+	Qow_max_slid = @bind Qow_max Slider(10.0:150.0,default = 100,show_value = true)
+	Co_slid = @bind Co Slider(0.0:200,default = 30.0,show_value = true)
 	β_slid = @bind β Slider(-5:-2,default = -3,show_value = true)
 	β_check = @bind vertslope CheckBox(default = true)
 
@@ -471,7 +471,7 @@ md"### Initial Conditions"
 # ╔═╡ 53fa604a-69de-4a40-9573-313786797194
 begin 
 
-	bL0_slid = @bind bL0 Slider(5.0:30.0,default = 10.0,show_value = true)
+	bL0_slid = @bind bL0 Slider(5.0:30.0,default = 5.0,show_value = true)
 
 	md"Initial Lagoon Width = $(bL0_slid)"
 
@@ -596,10 +596,12 @@ begin
 		
         xlims = (0,(xmm[length(Z)]/10^3+1)),
         xlabel = "Kilometers",
+        xflip = true,
         ylims = (0,(Z[length(Z)]+H[length(Z)]+1)),
         ylabel = "Meters",
+        ymirror = true,
         framestyle = :box,
-        legend = :bottomright,
+        legend = :bottomleft,
         legend_columns = 1,
         legendfontsize = 8,
         foreground_color_legend = nothing,
